@@ -280,7 +280,7 @@ async function fetchAll(tableId) {
     records = records.concat(data.records.map(r => r.fields));
     offset = data.offset || null;
   } while (offset);
-  return records;
+  return records.filter(r => r.Address && r.Address !== 'undefined');
 }
 
 function makeChart(canvasId, config) {
