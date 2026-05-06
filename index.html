@@ -531,7 +531,7 @@ async function init() {
     </tr>`);
 
   // ── ON-PAGE ──
-  const htmlOnly = internal.filter(r=>(r['Content Type']||'').includes('html'));
+  const htmlOnly = internal.filter(r=>(r['Content Type']||'').includes('html') && r['Status Code'] === 200);
   const titleMissing   = htmlOnly.filter(r=>!r['Title 1']||r['Title 1 Length']===0).length;
   const titleLong      = htmlOnly.filter(r=>(r['Title 1 Length']||0)>60).length;
   const titleShort     = htmlOnly.filter(r=>(r['Title 1 Length']||0)>0&&(r['Title 1 Length']||0)<30).length;
