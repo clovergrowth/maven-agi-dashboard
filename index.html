@@ -469,7 +469,7 @@
     <div class="scorecards" id="ci-scorecards"></div>
     <div class="charts-grid" id="ci-charts"></div>
     <div class="table-card">
-      <div class="table-header">Near Duplicates</div>
+      <div class="table-header">Content Issues <input class="table-search" id="ci-search" placeholder="Filter URLs…" oninput="filterTable('ci-table', this.value)"></div>
       <div class="table-wrap"><table id="ci-table"></table></div>
     </div>
   </div>
@@ -602,15 +602,113 @@ function badge(text, type) {
   return `<span class="badge badge-${type}">${text}</span>`;
 }
 
+// ── Table state: sort + filters per table ────────────────────────────
+const _tbl = {};
+function _tblState(id) {
+  if (!_tbl[id]) _tbl[id] = { textQ: '', filterCol: -1, filterVal: '', sortCol: -1, sortDir: 1, customFilter: null };
+  return _tbl[id];
+}
+
+function _refreshTable(id) {
+  const tableEl = document.getElementById(id);
+  const state = _tblState(id);
+  if (!tableEl) return;
+  const tbody = tableEl.querySelector('tbody');
+  const allRows = Array.from(tbody.querySelectorAll('tr'));
+
+  allRows.forEach(r => {
+    let show = true;
+    if (state.textQ) show = show && r.textContent.toLowerCase().includes(state.textQ);
+    if (state.filterCol >= 0 && state.filterVal)
+      show = show && (r.cells[state.filterCol]?.textContent.trim() === state.filterVal);
+    if (state.customFilter) show = show && state.customFilter(r);
+    r.style.display = show ? '' : 'none';
+  });
+
+  if (state.sortCol >= 0) {
+    const visible = allRows.filter(r => r.style.display !== 'none');
+    visible.sort((a, b) => {
+      const aT = a.cells[state.sortCol]?.textContent.trim() || '';
+      const bT = b.cells[state.sortCol]?.textContent.trim() || '';
+      const aN = parseFloat(aT), bN = parseFloat(bT);
+      if (!isNaN(aN) && !isNaN(bN)) return (aN - bN) * state.sortDir;
+      return aT.localeCompare(bT) * state.sortDir;
+    });
+    visible.forEach(r => tbody.appendChild(r));
+  }
+
+  tableEl.querySelectorAll('thead th .sort-icon').forEach((icon, i) => {
+    if (i === state.sortCol) {
+      icon.textContent = state.sortDir === 1 ? '↑' : '↓';
+      icon.style.opacity = '1'; icon.style.color = 'var(--lime)';
+    } else {
+      icon.textContent = '↕'; icon.style.opacity = '0.3'; icon.style.color = '';
+    }
+  });
+}
+
 function filterTable(tableId, query) {
-  const rows = document.querySelectorAll(`#${tableId} tbody tr`);
-  const q = query.toLowerCase();
-  rows.forEach(r => { r.style.display = r.textContent.toLowerCase().includes(q) ? '' : 'none'; });
+  _tblState(tableId).textQ = query.toLowerCase();
+  _refreshTable(tableId);
 }
 
 function buildTable(tableEl, headers, rows, renderRow) {
-  tableEl.innerHTML = `<thead><tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr></thead>
-    <tbody>${rows.map(renderRow).join('')}</tbody>`;
+  tableEl.innerHTML = `<thead><tr>${headers.map((h, i) =>
+    `<th data-col="${i}" style="cursor:pointer;user-select:none;white-space:nowrap">${h} <span class="sort-icon" style="font-size:10px;opacity:0.3">↕</span></th>`
+  ).join('')}</tr></thead>
+  <tbody>${rows.map(renderRow).join('')}</tbody>`;
+
+  const id = tableEl.id;
+  tableEl.querySelectorAll('thead th').forEach((th, i) => {
+    th.addEventListener('click', () => {
+      const state = _tblState(id);
+      if (state.sortCol === i) state.sortDir *= -1;
+      else { state.sortCol = i; state.sortDir = 1; }
+      _refreshTable(id);
+    });
+  });
+}
+
+// Add auto-populated dropdown filter from a column's unique values
+function addColFilter(tableId, colIndex, label) {
+  const tableEl = document.getElementById(tableId);
+  if (!tableEl) return;
+  const vals = new Set();
+  tableEl.querySelectorAll('tbody tr').forEach(r => {
+    const v = r.cells[colIndex]?.textContent.trim();
+    if (v && v !== '—' && v !== '') vals.add(v);
+  });
+  const sel = document.createElement('select');
+  sel.className = 'table-search';
+  sel.style.cssText = 'width:auto;min-width:150px;margin-left:8px';
+  sel.innerHTML = `<option value="">All: ${label}</option>` +
+    [...vals].sort((a, b) => { const na = parseFloat(a), nb = parseFloat(b); return (!isNaN(na) && !isNaN(nb)) ? na - nb : a.localeCompare(b); })
+      .map(v => `<option value="${v}">${v}</option>`).join('');
+  sel.addEventListener('change', () => {
+    const state = _tblState(tableId);
+    state.filterCol = sel.value ? colIndex : -1;
+    state.filterVal = sel.value;
+    _refreshTable(tableId);
+  });
+  const header = tableEl.closest('.table-card')?.querySelector('.table-header');
+  if (header) header.appendChild(sel);
+}
+
+// Add a predefined options dropdown (grouped / computed filters)
+function addOptionsFilter(tableId, label, options) {
+  const tableEl = document.getElementById(tableId);
+  if (!tableEl) return;
+  const sel = document.createElement('select');
+  sel.className = 'table-search';
+  sel.style.cssText = 'width:auto;min-width:170px;margin-left:8px';
+  sel.innerHTML = `<option value="">All: ${label}</option>` +
+    options.map((o, i) => `<option value="${i}">${o.label}</option>`).join('');
+  sel.addEventListener('change', () => {
+    _tblState(tableId).customFilter = sel.value === '' ? null : options[+sel.value].fn;
+    _refreshTable(tableId);
+  });
+  const header = tableEl.closest('.table-card')?.querySelector('.table-header');
+  if (header) header.appendChild(sel);
 }
 
 function statusBadge(code) {
@@ -740,6 +838,13 @@ async function init() {
       <td>${(r['Content Type']||'').replace('; charset=utf-8','')}</td>
       <td>${fmt(r.Inlinks)}</td>
     </tr>`);
+  addOptionsFilter('rc-table', 'Status Category', [
+    { label: '2xx — Success',      fn: r => { const c = +r.cells[1]?.textContent.trim(); return c >= 200 && c < 300; } },
+    { label: '3xx — Redirect',     fn: r => { const c = +r.cells[1]?.textContent.trim(); return c >= 300 && c < 400; } },
+    { label: '4xx — Client Error', fn: r => { const c = +r.cells[1]?.textContent.trim(); return c >= 400 && c < 500; } },
+    { label: '5xx — Server Error', fn: r => { const c = +r.cells[1]?.textContent.trim(); return c >= 500; } },
+  ]);
+  addColFilter('rc-table', 2, 'Status Text');
 
   // ── URL TYPES ──
   const imgUrls = internal.filter(r => (r['Content Type']||'').startsWith('image/'));
@@ -776,6 +881,7 @@ async function init() {
       <td>${r['Indexability Status']||'—'}</td>
       <td>${r['Crawl Depth']||'—'}</td>
     </tr>`);
+  addColFilter('idx-table', 2, 'Reason');
 
   // ── SITE STRUCTURE ──
   document.getElementById('ss-charts').innerHTML = [
@@ -875,6 +981,11 @@ async function init() {
       <td>${r['Title 1 Length']||0}</td>
       <td>${r.Indexability==='Indexable'?badge('Yes','green'):badge('No','red')}</td>
     </tr>`);
+  addOptionsFilter('pt-table', 'Title Issues', [
+    { label: 'Missing title',        fn: r => r.cells[1]?.textContent.trim() === 'Missing' },
+    { label: 'Too long (>60 chars)', fn: r => +r.cells[2]?.textContent.trim() > 60 },
+    { label: 'Too short (<30 chars)',fn: r => { const l = +r.cells[2]?.textContent.trim(); return l > 0 && l < 30; } },
+  ]);
 
   // Meta desc table
   buildTable(document.querySelector('#md-table'), ['URL','Meta Description','Length','Indexable'],
@@ -884,6 +995,11 @@ async function init() {
       <td>${r['Meta Description 1 Length']||0}</td>
       <td>${r.Indexability==='Indexable'?badge('Yes','green'):badge('No','red')}</td>
     </tr>`);
+  addOptionsFilter('md-table', 'Meta Issues', [
+    { label: 'Missing meta description', fn: r => r.cells[1]?.textContent.trim() === 'Missing' },
+    { label: 'Too long (>160 chars)',     fn: r => +r.cells[2]?.textContent.trim() > 160 },
+    { label: 'Too short (<70 chars)',     fn: r => { const l = +r.cells[2]?.textContent.trim(); return l > 0 && l < 70; } },
+  ]);
 
   // H1 table
   buildTable(document.querySelector('#h1-table'), ['URL','H1','H1 Length','Multiple H1','Indexable'],
@@ -894,6 +1010,10 @@ async function init() {
       <td>${r['H1-2']?badge('Yes','orange'):badge('No','green')}</td>
       <td>${r.Indexability==='Indexable'?badge('Yes','green'):badge('No','red')}</td>
     </tr>`);
+  addOptionsFilter('h1-table', 'H1 Issues', [
+    { label: 'Missing H1',     fn: r => r.cells[1]?.textContent.trim() === 'Missing' },
+    { label: 'Multiple H1s',   fn: r => r.cells[3]?.textContent.trim() === 'Yes' },
+  ]);
 
   // ── CONTENT ISSUES ──
   const ciPages     = internal.filter(r => r['Status Code'] === 200 && (r['Content Type']||'').includes('html'));
@@ -976,6 +1096,13 @@ async function init() {
       <td>${(r['Spelling Errors']||0)>0?badge(r['Spelling Errors'],'red'):0}</td>
       <td>${(r['Grammar Errors']||0)>0?badge(r['Grammar Errors'],'orange'):0}</td>
     </tr>`);
+  addOptionsFilter('ci-table', 'Show pages with…', [
+    { label: 'Spelling errors',   fn: r => +r.cells[6]?.textContent.trim() > 0 },
+    { label: 'Grammar errors',    fn: r => +r.cells[7]?.textContent.trim() > 0 },
+    { label: 'Near duplicates',   fn: r => +r.cells[5]?.textContent.trim() > 0 },
+    { label: 'Any issue',         fn: r => +r.cells[5]?.textContent.trim() > 0 || +r.cells[6]?.textContent.trim() > 0 || +r.cells[7]?.textContent.trim() > 0 },
+  ]);
+  addColFilter('ci-table', 3, 'Readability Level');
 
   // ── STRUCTURED DATA ──
   const sdWithData = structuredData.filter(r=>(r['Total Types']||0)>0).length;
@@ -1016,6 +1143,12 @@ async function init() {
       <td>${(r.Errors||0)>0?badge(r.Errors,'red'):0}</td>
       <td>${(r.Warnings||0)>0?badge(r.Warnings,'orange'):0}</td>
     </tr>`);
+  addOptionsFilter('sd-table', 'Schema filter', [
+    { label: 'Has schema',      fn: r => r.cells[1]?.textContent.trim() === 'Yes' },
+    { label: 'No schema',       fn: r => r.cells[1]?.textContent.trim() === 'No' },
+    { label: 'Has errors',      fn: r => +r.cells[4]?.textContent.trim() > 0 },
+    { label: 'Has warnings',    fn: r => +r.cells[5]?.textContent.trim() > 0 },
+  ]);
 
   // ── SECURITY ──
   const httpsUrls = internal.filter(r=>(r.Address||'').startsWith('https://'));
@@ -1080,6 +1213,12 @@ async function init() {
       <td>${r.Indexability==='Indexable'?badge('Indexable','green'):badge(r.Indexability||'—','orange')}</td>
       <td>${(r['Content Type']||'').replace('; charset=utf-8','')}</td>
     </tr>`);
+  addColFilter('sm-table', 2, 'Indexability');
+  addOptionsFilter('sm-table', 'Status Category', [
+    { label: '2xx — OK',        fn: r => { const c = +r.cells[1]?.textContent.trim(); return c >= 200 && c < 300; } },
+    { label: '3xx — Redirect',  fn: r => { const c = +r.cells[1]?.textContent.trim(); return c >= 300 && c < 400; } },
+    { label: '4xx — Error',     fn: r => { const c = +r.cells[1]?.textContent.trim(); return c >= 400 && c < 500; } },
+  ]);
 }
 
 window.filterTable = filterTable;
